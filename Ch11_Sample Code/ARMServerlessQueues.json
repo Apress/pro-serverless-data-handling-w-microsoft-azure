@@ -1,0 +1,222 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "sqlDbAdminLogin": {
+      "type": "string",
+      "defaultValue": "sqldemoadmin",
+      "metadata": {
+        "description": "The username for the database administrator login"
+      }
+    },
+    "sqlDbAdminPassword": {
+      "type": "securestring",
+      "defaultValue": "!demo54321",
+      "metadata": {
+        "description": "The password for the database administrator login"
+      }
+    },
+    "utcValue": {
+      "type": "string",
+      "defaultValue": "[utcNow('d')]",
+      "metadata": {
+        "description": "The timestamp format that will be used for creating the tags in your RG - leave at default"
+      }
+    }
+  },
+  "variables": {
+    "blobStorageAccountName": "[concat('stgblob', uniqueString(resourceGroup().id))]",
+    "sqldb_servername": "[concat('sqlsrv-', '-', uniqueString(resourceGroup().id))]",
+    "sqldb_dbname": "[concat('sqldb-', uniqueString(resourceGroup().id))]",
+    "functionAppServicePlanName": "[concat('appservice-', uniqueString(resourceGroup().id))]",
+    "functionAppName": "[concat('function-', uniqueString(resourceGroup().id))]",
+    "tags": {
+      "createdOn": "[parameters('utcValue')]",
+      "createdBy": "Automatic deployment for Serverless Data Handling Demos"
+    }
+  },
+  "resources": [
+    { // create blob storage account
+      "type": "Microsoft.Storage/storageAccounts",
+      "apiVersion": "2021-04-01",
+      "name": "[variables('blobStorageAccountName')]",
+      "location": "westeurope",
+      "tags": "[variables('tags')]",
+      "sku": {
+        "name": "Standard_LRS",
+        "tier": "Standard"
+      },
+      "kind": "StorageV2",
+      "properties": {
+        "isHnsEnabled": true,
+        "networkAcls": {
+          "bypass": "AzureServices",
+          "virtualNetworkRules": [],
+          "ipRules": [],
+          "defaultAction": "Allow"
+        },
+        "supportsHttpsTrafficOnly": true,
+        "encryption": {
+          "services": {
+            "file": {
+              "keyType": "Account",
+              "enabled": true
+            },
+            "blob": {
+              "keyType": "Account",
+              "enabled": true
+            }
+          },
+          "keySource": "Microsoft.Storage"
+        },
+        "accessTier": "Hot"
+      }
+    },
+    { // create blob storage blob service
+      "type": "Microsoft.Storage/storageAccounts/blobServices",
+      "apiVersion": "2021-04-01",
+      "name": "[concat(variables('blobStorageAccountName'), '/default')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts', variables('blobStorageAccountName'))]"
+      ],
+      "sku": {
+        "name": "Standard_LRS",
+        "tier": "Standard"
+      },
+      "properties": {
+        "cors": {
+          "corsRules": []
+        },
+        "deleteRetentionPolicy": {
+          "enabled": false
+        }
+      }
+    },
+    { // create blob storage queue service
+      "type": "Microsoft.Storage/storageAccounts/queueServices",
+      "apiVersion": "2021-04-01",
+      "name": "[concat(variables('blobStorageAccountName'), '/default')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts', variables('blobStorageAccountName'))]"
+      ],
+      "properties": {
+        "cors": {
+          "corsRules": []
+        }
+      }
+    },
+    { // create blob storage table service
+      "type": "Microsoft.Storage/storageAccounts/tableServices",
+      "apiVersion": "2021-04-01",
+      "name": "[concat(variables('blobStorageAccountName'), '/default')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts', variables('blobStorageAccountName'))]"
+      ],
+      "properties": {
+        "cors": {
+          "corsRules": []
+        }
+      }
+    },
+    { // create sql server and database
+      "apiVersion": "2019-06-01-preview",
+      "type": "Microsoft.Sql/servers",
+      "location": "[resourceGroup().location]",
+      "tags": "[variables('tags')]",
+      "name": "[variables('sqldb_servername')]",
+      "properties": {
+        "administratorLogin": "[parameters('sqlDbAdminLogin')]",
+        "administratorLoginPassword": "[parameters('sqlDbAdminPassword')]",
+        "version": "12.0"
+      },
+      "resources": [
+        {
+          "apiVersion": "2021-02-01-preview",
+          "dependsOn": [
+            "[concat('Microsoft.Sql/servers/', variables('sqldb_servername'))]"
+          ],
+          "location": "[resourceGroup().location]",
+          "tags": "[variables('tags')]",
+          "name": "[variables('sqldb_dbname')]",
+          "properties": {
+            "collation": "SQL_Latin1_General_CP1_CI_AS",
+            "maxSizeBytes": "34359738368",
+            "zoneRedundant": false,
+            "minCapacity": 0.5,
+            "autoPauseDelay": 60,
+            "readScale": "Disabled",
+            "storageAccountType": "LRS"
+          },
+          "sku": {
+            "name": "GP_S_Gen5",
+            "tier": "GeneralPurpose",
+            "family": "Gen5",
+            "capacity": 4
+          },
+          "type": "databases"
+        },
+        {
+          "apiVersion": "2014-04-01-preview",
+          "dependsOn": [
+            "[concat('Microsoft.Sql/servers/', variables('sqldb_servername'))]"
+          ],
+          "location": "[resourceGroup().location]",
+          "name": "AllowAllWindowsAzureIps",
+          "properties": {
+            "endIpAddress": "0.0.0.0",
+            "startIpAddress": "0.0.0.0"
+          },
+          "type": "firewallrules"
+        }
+      ]
+    },
+    { // create the consumption plan for the Function
+      "type": "Microsoft.Web/serverfarms",
+      "apiVersion": "2020-06-01",
+      "name": "[variables('functionAppServicePlanName')]",
+      "location": "[resourceGroup().location]",
+      "sku": {
+        "name": "Y1",
+        "tier": "Dynamic"
+      },
+      "properties": {
+        "name": "[variables('functionAppServicePlanName')]",
+        "computeMode": "Dynamic"
+      }
+    },
+    {
+      "type": "Microsoft.Web/sites",
+      "apiVersion": "2020-06-01",
+      "name": "[variables('functionAppName')]",
+      "location": "[resourceGroup().location]",
+      "kind": "functionapp",
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/serverfarms', variables('functionAppServicePlanName'))]",
+        "[resourceId('Microsoft.Storage/storageAccounts', variables('blobStorageAccountName'))]"
+      ],
+      "properties": {
+        "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', variables('functionAppServicePlanName'))]",
+        "siteConfig": {
+          "appSettings": [
+            {
+              "name": "AzureWebJobsStorage",
+              "value": "[concat('DefaultEndpointsProtocol=https;AccountName=', variables('blobStorageAccountName'), ';EndpointSuffix=', environment().suffixes.storage, ';AccountKey=',listKeys(resourceId('Microsoft.Storage/storageAccounts', variables('blobStorageAccountName')), '2019-06-01').keys[0].value)]"
+            },
+            {
+              "name": "FUNCTIONS_EXTENSION_VERSION",
+              "value": "~2"
+            },
+            {
+              "name": "WEBSITE_NODE_DEFAULT_VERSION",
+              "value": "~10"
+            },
+            {
+              "name": "FUNCTIONS_WORKER_RUNTIME",
+              "value": "dotnet"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
